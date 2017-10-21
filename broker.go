@@ -55,16 +55,16 @@ func (b *Broker) Subscribe(topic string) (updates chan []byte, newPublisher *Pub
 
 // createTopicIfNotExists checks if a topic already exists. If so, nil is returned. If not, the topic
 // and a new publisher are created, and the new publisher is returned.
-func (p *Broker) createTopicIfNotExists(topic string) *Publisher {
-	if _, ok := p.publishers[topic]; ok {
+func (b *Broker) createTopicIfNotExists(topic string) *Publisher {
+	if _, ok := b.publishers[topic]; ok {
 		return nil
 	}
 
-	publisher, updates, stop := newPublisher(topic, p.notifyAboutTopic)
+	publisher, updates, stop := newPublisher(topic, b.notifyAboutTopic)
 
-	p.publishers[topic] = updates
-	p.stops[topic] = stop
-	p.subscribers[topic] = map[chan<- []byte]bool{}
+	b.publishers[topic] = updates
+	b.stops[topic] = stop
+	b.subscribers[topic] = map[chan<- []byte]bool{}
 
 	return publisher
 }
@@ -88,55 +88,54 @@ func (b *Broker) Unsubscribe(updates chan []byte, topic string) error {
 
 // stopPublisherIfNoSubs checks if there are subscribers for the topic left. If not, it signals the topic's publisher
 // to stop sending updates and removes the topic.
-func (p *Broker) removeTopicIfNoSubs(topic string) {
-	if subscribers, ok := p.subscribers[topic]; !ok || len(subscribers) != 0 {
+func (b *Broker) removeTopicIfNoSubs(topic string) {
+	if subscribers, ok := b.subscribers[topic]; !ok || len(subscribers) != 0 {
 		return
 	}
 
-	close(p.stops[topic])
-	p.removeTopic(topic)
-}
-
-// loop handles distribution of published updates as well as removing topics
-// when the publisher responsible closes the update channel.
-func (b *Broker) loop() {
-	for {
-		select {
-		case topic := <-b.notifyAboutTopic:
-			b.μ.Lock()
-
-			updates, ok := b.publishers[topic]
-			if !ok {
-				continue
-			}
-
-			update, ok := <-updates
-			if ok {
-				for subscriber := range b.subscribers[topic] {
-					select {
-					case subscriber <- update:
-					case <-time.After(10 * time.Millisecond):
-						// 10ms timeout for each subscriber to receive
-					}
-				}
-			} else {
-				b.removeTopic(topic)
-			}
-
-			b.μ.Unlock()
-		}
-	}
+	close(b.stops[topic])
+	b.removeTopic(topic)
 }
 
 // removeTopic closes all subscribers' update channels to signal that there will
 // be no more updates on the topic, then removes the topic entirely. It assumes
 // that the upstream publisher channel is already closed.
-func (p *Broker) removeTopic(topic string) {
-	for subscriber := range p.subscribers[topic] {
+func (b *Broker) removeTopic(topic string) {
+	for subscriber := range b.subscribers[topic] {
 		close(subscriber)
 	}
 
-	delete(p.subscribers, topic)
-	delete(p.publishers, topic)
-	delete(p.stops, topic)
+	delete(b.subscribers, topic)
+	delete(b.publishers, topic)
+	delete(b.stops, topic)
+}
+
+// loop handles distribution of published updates as well as removing topics
+// when the publisher responsible closes the update channel.
+func (b *Broker) loop() {
+	for topic := range b.notifyAboutTopic {
+		b.μ.Lock()
+
+		// ignore publishers whose topic doesn't exist anymore
+		updates, ok := b.publishers[topic]
+		if !ok {
+			b.μ.Unlock()
+			continue
+		}
+
+		update, ok := <-updates
+		if ok {
+			for subscriber := range b.subscribers[topic] {
+				select {
+				case subscriber <- update:
+				case <-time.After(10 * time.Millisecond):
+					// 10ms timeout for each subscriber to receive
+				}
+			}
+		} else {
+			b.removeTopic(topic)
+		}
+
+		b.μ.Unlock()
+	}
 }
