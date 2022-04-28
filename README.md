@@ -24,48 +24,4 @@ Subscribers receive updates on channels provided to them when they subscribe to 
 
 ## Example
 
-```go
-package main
-
-import (
-	"time"
-
-	"github.com/sauerbraten/pubsub"
-)
-
-func main() {
-	broker := pubsub.NewBroker()
-
-	// subscribe to topic
-	updates, newPublisher := broker.Subscribe("topic")
-	if newPublisher != nil {
-		// maybe start producing updates to receive
-		go publish(newPublisher)
-	}
-
-	// subscribe many goroutines to the same topic
-	// and/or
-	// subscribe one goroutine to many different topics (requires additional publishing goroutines)
-
-	// receive updates until broker unsubscribes you
-	for update := range updates {
-		// process update
-	}
-
-	// or, at some point, just unsubscribe
-	broker.Unsubscribe(updates, "topic")
-}
-
-func publish(pub *pubsub.Publisher) {
-	for {
-		select {
-		case <-pub.Stop:
-			pub.Close()
-			return
-
-		case <-time.After(1 * time.Second):
-			pub.Publish([]byte("update"))
-		}
-	}
-}
-```
+See [example/main.go](./example/main.go).

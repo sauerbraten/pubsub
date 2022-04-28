@@ -14,22 +14,22 @@ import (
 )
 
 // Broker handles subscribing and unsubcribing to topics.
-type Broker struct {
+type Broker[U any] struct {
 	μ sync.Mutex
 
-	publishers  map[string]<-chan []byte          // publishers' update channels by topic
-	stops       map[string]chan<- struct{}        // channels the publishers listen on for a stop signal; indexed by topic
-	subscribers map[string]map[chan<- []byte]bool // set of subscribers by topic
+	publishers  map[string]<-chan U          // publishers' update channels by topic
+	stops       map[string]chan<- struct{}   // channels the publishers listen on for a stop signal; indexed by topic
+	subscribers map[string]map[chan<- U]bool // set of subscribers by topic
 
 	notifyAboutTopic chan string // channel on which publishers notify the broker about news for a certain topic
 }
 
 // NewBroker creates a broker and starts a goroutine handling message distribution.
-func NewBroker() *Broker {
-	b := &Broker{
-		publishers:       map[string]<-chan []byte{},
+func NewBroker[U any]() *Broker[U] {
+	b := &Broker[U]{
+		publishers:       map[string]<-chan U{},
 		stops:            map[string]chan<- struct{}{},
-		subscribers:      map[string]map[chan<- []byte]bool{},
+		subscribers:      map[string]map[chan<- U]bool{},
 		notifyAboutTopic: make(chan string),
 	}
 
@@ -42,12 +42,12 @@ func NewBroker() *Broker {
 // Subscribe makes sure the topic exists by creating it if neccessary. When a new
 // topic was created, a corresponding publisher is returned, otherwise newPublisher
 // is nil.
-func (b *Broker) Subscribe(topic string) (updates chan []byte, newPublisher *Publisher) {
+func (b *Broker[U]) Subscribe(topic string) (updates chan U, newPublisher *Publisher[U]) {
 	b.μ.Lock()
 	defer b.μ.Unlock()
 
 	newPublisher = b.createTopicIfNotExists(topic)
-	updates = make(chan []byte)
+	updates = make(chan U)
 	b.subscribers[topic][updates] = true
 
 	return
@@ -55,23 +55,23 @@ func (b *Broker) Subscribe(topic string) (updates chan []byte, newPublisher *Pub
 
 // createTopicIfNotExists checks if a topic already exists. If so, nil is returned. If not, the topic
 // and a new publisher are created, and the new publisher is returned.
-func (b *Broker) createTopicIfNotExists(topic string) *Publisher {
+func (b *Broker[U]) createTopicIfNotExists(topic string) *Publisher[U] {
 	if _, ok := b.publishers[topic]; ok {
 		return nil
 	}
 
-	publisher, updates, stop := newPublisher(topic, b.notifyAboutTopic)
+	publisher, updates, stop := newPublisher[U](topic, b.notifyAboutTopic)
 
 	b.publishers[topic] = updates
 	b.stops[topic] = stop
-	b.subscribers[topic] = map[chan<- []byte]bool{}
+	b.subscribers[topic] = map[chan<- U]bool{}
 
 	return publisher
 }
 
 // Unsubscribe removes the specified channel from the topic, meaning there will be no more messages sent to updates.
 // Unsubscribe will close updates.
-func (b *Broker) Unsubscribe(updates chan []byte, topic string) error {
+func (b *Broker[U]) Unsubscribe(updates chan U, topic string) error {
 	b.μ.Lock()
 	defer b.μ.Unlock()
 
@@ -88,7 +88,7 @@ func (b *Broker) Unsubscribe(updates chan []byte, topic string) error {
 
 // stopPublisherIfNoSubs checks if there are subscribers for the topic left. If not, it signals the topic's publisher
 // to stop sending updates and removes the topic.
-func (b *Broker) removeTopicIfNoSubs(topic string) {
+func (b *Broker[U]) removeTopicIfNoSubs(topic string) {
 	if subscribers, ok := b.subscribers[topic]; !ok || len(subscribers) != 0 {
 		return
 	}
@@ -100,7 +100,7 @@ func (b *Broker) removeTopicIfNoSubs(topic string) {
 // removeTopic closes all subscribers' update channels to signal that there will
 // be no more updates on the topic, then removes the topic entirely. It assumes
 // that the upstream publisher channel is already closed.
-func (b *Broker) removeTopic(topic string) {
+func (b *Broker[U]) removeTopic(topic string) {
 	for subscriber := range b.subscribers[topic] {
 		close(subscriber)
 	}
@@ -112,7 +112,7 @@ func (b *Broker) removeTopic(topic string) {
 
 // loop handles distribution of published updates as well as removing topics
 // when the publisher responsible closes the update channel.
-func (b *Broker) loop() {
+func (b *Broker[U]) loop() {
 	for topic := range b.notifyAboutTopic {
 		b.μ.Lock()
 
